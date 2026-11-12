@@ -12,8 +12,10 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/projectdiscovery/alterx/internal/dank"
 	"github.com/projectdiscovery/gologger"
@@ -82,16 +84,17 @@ type RulesOutput struct {
 
 // Miner performs pattern mining on subdomain data
 type Miner struct {
-	opts  *Options
-	memo  map[string]int   // memoized levenshtein distances
-	words map[string]int64 // memoized NumWords per regex
+	opts   *Options
+	index  map[string]int   // host -> row of the distance table
+	rowOff []int            // start of each triangular row in dist
+	dist   []uint16         // upper-triangular Levenshtein distances
+	words  map[string]int64 // memoized NumWords per regex
 }
 
 // NewMiner creates a new pattern miner
 func NewMiner(opts *Options) *Miner {
 	return &Miner{
 		opts:  opts,
-		memo:  make(map[string]int),
 		words: make(map[string]int64),
 	}
 }
@@ -316,15 +319,40 @@ func (m *Miner) validateDomains() []string {
 	return m.removeDuplicatesAndSort(knownHosts)
 }
 
-// buildDistanceTable computes all pairwise levenshtein distances
+// buildDistanceTable computes pairwise Levenshtein distances for the unique hosts, one row per task.
 func (m *Miner) buildDistanceTable(hosts []string) {
-	for i := 0; i < len(hosts); i++ {
-		for j := i; j < len(hosts); j++ {
-			d := levenshtein(hosts[i], hosts[j])
-			key := getKey(hosts[i], hosts[j])
-			m.memo[key] = d
+	m.index = make(map[string]int, len(hosts))
+	var uniq []string
+	for _, h := range hosts {
+		if _, ok := m.index[h]; !ok {
+			m.index[h] = len(uniq)
+			uniq = append(uniq, h)
 		}
 	}
+	n := len(uniq)
+	m.rowOff = make([]int, n+1)
+	for i := 0; i < n; i++ {
+		m.rowOff[i+1] = m.rowOff[i] + n - i
+	}
+	m.dist = make([]uint16, m.rowOff[n])
+	rows := make(chan int, n)
+	for i := 0; i < n; i++ {
+		rows <- i
+	}
+	close(rows)
+	var wg sync.WaitGroup
+	for w := 0; w < runtime.GOMAXPROCS(0); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range rows {
+				for j := i; j < n; j++ {
+					m.dist[m.rowOff[i]+j-i] = uint16(levenshtein(uniq[i], uniq[j]))
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // generateNgrams creates unigrams and bigrams
@@ -584,20 +612,15 @@ func (m *Miner) groupRulesByStep(rules map[string]map[string]interface{}) *Rules
 	}
 }
 
-// getDist retrieves memoized distance
-func (m *Miner) getDist(a, b string) int {
-	key := getKey(a, b)
-	if d, ok := m.memo[key]; ok {
-		return d
+// distIdx returns the distance between two host rows, or 999999 when a host is unknown (-1).
+func (m *Miner) distIdx(i, j int) int {
+	if i < 0 || j < 0 {
+		return 999999
 	}
-	return 999999
-}
-
-func getKey(a, b string) string {
-	if strings.Compare(a, b) < 0 {
-		return a + "\x00" + b
+	if i > j {
+		i, j = j, i
 	}
-	return b + "\x00" + a
+	return int(m.dist[m.rowOff[i]+j-i])
 }
 
 func min(a, b int) int {

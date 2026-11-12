@@ -246,7 +246,7 @@ When adding features that interact with modes:
 - **Dedupe enabled by default:** `DedupeResults = true` in `mutator.go`
 - **Prefix optimization:** ClusterBomb skips words already in leftmost subdomain (lines 378-387 in `mutator.go`)
 - **Pattern quality critical:** Low thresholds generate millions of subdomains
-- **Distance memoization:** Pattern mining caches Levenshtein distances for performance in `Miner.memo` map
+- **Distance table:** Pattern mining builds an upper-triangular `uint16` Levenshtein table over unique hosts in `Miner.dist`, indexed through `Miner.index`
 - **DFA minimization:** Three-pass Brzozowski ensures minimal automaton
 - **No breaking changes:** All pattern mining is additive; default behavior unchanged
 - **SaveRules timing:** Must be called AFTER `Execute()` to ensure mining completes (line 68-72 in `cmd/alterx/main.go`)

@@ -1,52 +1,53 @@
 package patternmining
 
-import "sort"
+import (
+	"sort"
+)
 
-// editClosures computes edit-distance closures for clustering
+// editClosures groups the unique items into edit-distance closures, one per distinct member set.
 func (m *Miner) editClosures(items []string, delta int) [][]string {
+	sorted := append([]string(nil), items...)
+	sort.Strings(sorted)
+	var uniq []string
+	for k, s := range sorted {
+		if k == 0 || s != sorted[k-1] {
+			uniq = append(uniq, s)
+		}
+	}
+	ids := make([]int, len(uniq))
+	for k, s := range uniq {
+		id, ok := m.index[s]
+		if !ok {
+			id = -1
+		}
+		ids[k] = id
+	}
 	var ret [][]string
-	for _, a := range items {
-		rSet := make(map[string]bool)
-		rSet[a] = true
-		for _, b := range items {
-			d := m.getDist(a, b)
-			if d < delta {
-				rSet[b] = true
+	seen := make(map[string]bool)
+	var members []int
+	var buf []byte
+	for ai := range uniq {
+		members = members[:0]
+		for bi := range uniq {
+			if bi == ai || m.distIdx(ids[ai], ids[bi]) < delta {
+				members = append(members, bi)
 			}
 		}
-		r := []string{}
-		for k := range rSet {
-			r = append(r, k)
+		buf = buf[:0]
+		for _, bi := range members {
+			buf = append(buf, uniq[bi]...)
+			buf = append(buf, 0)
 		}
-		found := false
-		for _, s := range ret {
-			if sameSlices(r, s) {
-				found = true
-				break
-			}
+		if seen[string(buf)] {
+			continue
 		}
-		if !found {
-			ret = append(ret, r)
+		seen[string(buf)] = true
+		r := make([]string, len(members))
+		for k, bi := range members {
+			r[k] = uniq[bi]
 		}
+		ret = append(ret, r)
 	}
 	return ret
-}
-
-func sameSlices(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	sa := make([]string, len(a))
-	copy(sa, a)
-	sb := make([]string, len(b))
-	copy(sb, b)
-	sort.Strings(sa)
-	sort.Strings(sb)
-	for i := range sa {
-		if sa[i] != sb[i] {
-			return false
-		}
-	}
-	return true
 }
 
