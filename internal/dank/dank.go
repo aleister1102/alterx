@@ -3,6 +3,7 @@ package dank
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"regexp"
 	"sort"
@@ -462,6 +463,9 @@ func (d *DankEncoder) NumWords(minLen, maxLen int) int64 {
 		}
 	}
 
+	if !total.IsInt64() {
+		return math.MaxInt64
+	}
 	return total.Int64()
 }
 
@@ -504,13 +508,14 @@ func (d *DankEncoder) GenerateAtFixedLengthWithContextAndLimit(ctx context.Conte
 		}
 		results = make([]string, 0, capacity)
 	}
-	err := d.dfsGenerateFixed(ctx, 0, "", fixedLen, maxResults, &results)
+	live := d.liveStates(fixedLen)
+	err := d.dfsGenerateFixed(ctx, 0, "", fixedLen, maxResults, live, &results)
 	sort.Strings(results)
 	return results, err
 }
 
 // dfsGenerateFixed generates only strings of exact length with context and limit checks
-func (d *DankEncoder) dfsGenerateFixed(ctx context.Context, state int, curr string, remaining int, maxResults int, results *[]string) error {
+func (d *DankEncoder) dfsGenerateFixed(ctx context.Context, state int, curr string, remaining int, maxResults int, live [][]bool, results *[]string) error {
 	if maxResults > 0 && len(*results) >= maxResults {
 		return nil
 	}
@@ -552,13 +557,35 @@ func (d *DankEncoder) dfsGenerateFixed(ctx context.Context, state int, curr stri
 		}
 		next := d.dfa[state].Trans[ch]
 		// Don't transition to dead state during generation
-		if next != deadState {
-			if err := d.dfsGenerateFixed(ctx, next, curr+string(ch), remaining-1, maxResults, results); err != nil {
+		if next != deadState && live[remaining-1][next] {
+			if err := d.dfsGenerateFixed(ctx, next, curr+string(ch), remaining-1, maxResults, live, results); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// liveStates reports, for each step count r, which states reach a final state in exactly r steps.
+func (d *DankEncoder) liveStates(n int) [][]bool {
+	deadState := len(d.dfa) - 1
+	live := make([][]bool, n+1)
+	live[0] = make([]bool, len(d.dfa))
+	for s := range d.dfa {
+		live[0][s] = s != deadState && d.dfa[s].IsFinal
+	}
+	for r := 1; r <= n; r++ {
+		live[r] = make([]bool, len(d.dfa))
+		for s := range d.dfa {
+			for _, next := range d.dfa[s].Trans {
+				if next != deadState && live[r-1][next] {
+					live[r][s] = true
+					break
+				}
+			}
+		}
+	}
+	return live
 }
 
 // NumStates returns the number of DFA states
