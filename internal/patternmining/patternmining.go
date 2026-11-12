@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"sort"
@@ -81,16 +82,28 @@ type RulesOutput struct {
 
 // Miner performs pattern mining on subdomain data
 type Miner struct {
-	opts *Options
-	memo map[string]int // memoized levenshtein distances
+	opts  *Options
+	memo  map[string]int   // memoized levenshtein distances
+	words map[string]int64 // memoized NumWords per regex
 }
 
 // NewMiner creates a new pattern miner
 func NewMiner(opts *Options) *Miner {
 	return &Miner{
-		opts: opts,
-		memo: make(map[string]int),
+		opts:  opts,
+		memo:  make(map[string]int),
+		words: make(map[string]int64),
 	}
+}
+
+// numWords counts strings the pattern produces, memoized per regex.
+func (m *Miner) numWords(regex string) int64 {
+	if n, ok := m.words[regex]; ok {
+		return n
+	}
+	n := dank.NewDankEncoder(m.preparePattern(regex), 256).NumWords(1, 256)
+	m.words[regex] = n
+	return n
 }
 
 // Mine discovers patterns from input domains
@@ -129,7 +142,7 @@ func (m *Miner) Mine() (*Result, error) {
 			}
 			subdomainPattern := strings.TrimSuffix(pattern, "."+m.opts.Target)
 			if m.isGoodRule(subdomainPattern, len(closure)) {
-				nwords := dank.NewDankEncoder(m.preparePattern(subdomainPattern), 256).NumWords(1, 256)
+				nwords := m.numWords(subdomainPattern)
 				ratio := float64(0)
 				if len(closure) > 0 {
 					ratio = float64(nwords) / float64(len(closure))
@@ -162,7 +175,7 @@ func (m *Miner) Mine() (*Result, error) {
 		rUn, _ := m.closureToRegex(false, keys)
 		rEsc, _ := m.closureToRegex(true, keys)
 		if m.isGoodRule(rEsc, len(keys)) {
-			nwords := dank.NewDankEncoder(m.preparePattern(rEsc), 256).NumWords(1, 256)
+			nwords := m.numWords(rEsc)
 			ratio := float64(0)
 			if len(keys) > 0 {
 				ratio = float64(nwords) / float64(len(keys))
@@ -195,7 +208,7 @@ func (m *Miner) Mine() (*Result, error) {
 					continue
 				}
 
-				nwords := dank.NewDankEncoder(m.preparePattern(rEsc), 256).NumWords(1, 256)
+				nwords := m.numWords(rEsc)
 				ratio := float64(0)
 				if len(keys2) > 0 {
 					ratio = float64(nwords) / float64(len(keys2))
@@ -222,7 +235,7 @@ func (m *Miner) Mine() (*Result, error) {
 						rEsc, _ := m.closureToRegex(true, closure)
 
 						if m.isGoodRule(rEsc, len(closure)) {
-							nwords := dank.NewDankEncoder(m.preparePattern(rEsc), 256).NumWords(1, 256)
+							nwords := m.numWords(rEsc)
 							ratio := float64(0)
 							if len(closure) > 0 {
 								ratio = float64(nwords) / float64(len(closure))
@@ -380,7 +393,11 @@ func (m *Miner) EstimateCount(patterns []string) int64 {
 		encoder := dank.NewDankEncoder(m.preparePattern(subdomainPattern), fixedSlice)
 		// Use NumWords to count strings at fixed length without generating them
 		count := encoder.NumWords(fixedSlice, fixedSlice)
-		totalEstimate += count
+		if count > math.MaxInt64-totalEstimate {
+			totalEstimate = math.MaxInt64
+		} else {
+			totalEstimate += count
+		}
 	}
 
 	return totalEstimate
@@ -440,8 +457,7 @@ func (m *Miner) GenerateFromPatternsWithContext(ctx context.Context, patterns []
 // Helper functions
 
 func (m *Miner) isGoodRule(regex string, nkeys int) bool {
-	encoder := dank.NewDankEncoder(m.preparePattern(regex), 256)
-	nwords := encoder.NumWords(1, 256)
+	nwords := m.numWords(regex)
 	if nwords < int64(m.opts.PatternThreshold) {
 		return true
 	}
