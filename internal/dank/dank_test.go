@@ -2,6 +2,8 @@ package dank
 
 import (
 	"context"
+	"math"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,7 +27,7 @@ func (c *cancelAfter) Err() error {
 }
 
 func TestGenerateAtFixedLength(t *testing.T) {
-	encoder := NewDankEncoder("(a|b)(1|2)", 2)
+	encoder := NewDankEncoder("(a|b)(1|2)")
 	results := encoder.GenerateAtFixedLength(2)
 
 	expected := []string{"a1", "a2", "b1", "b2"}
@@ -33,14 +35,14 @@ func TestGenerateAtFixedLength(t *testing.T) {
 }
 
 func TestGenerateAtFixedLength_NegativeLength(t *testing.T) {
-	encoder := NewDankEncoder("(a|b)(1|2)", 2)
+	encoder := NewDankEncoder("(a|b)(1|2)")
 	results := encoder.GenerateAtFixedLength(-1)
 	require.Empty(t, results)
 }
 
 func TestGenerateAtFixedLengthWithLimit(t *testing.T) {
 	// (a|b|c|d)[0-9] produces 40 strings of length 2
-	encoder := NewDankEncoder("(a|b|c|d)[0-9]", 2)
+	encoder := NewDankEncoder("(a|b|c|d)[0-9]")
 
 	// Test limit = 5
 	limited5 := encoder.GenerateAtFixedLengthWithLimit(2, 5)
@@ -65,7 +67,7 @@ func TestGenerateAtFixedLengthWithLimit(t *testing.T) {
 }
 
 func TestGenerateAtFixedLengthWithContext_Cancelled(t *testing.T) {
-	encoder := NewDankEncoder("(a|b|c|d)[0-9]", 2)
+	encoder := NewDankEncoder("(a|b|c|d)[0-9]")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -78,7 +80,7 @@ func TestGenerateAtFixedLengthWithContext_Cancelled(t *testing.T) {
 
 func TestGenerateAtFixedLengthWithContext_Timeout(t *testing.T) {
 	// Create a pattern with large branching factor
-	encoder := NewDankEncoder("[a-z][a-z][a-z][a-z][a-z]", 5)
+	encoder := NewDankEncoder("[a-z][a-z][a-z][a-z][a-z]")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
 	defer cancel()
@@ -90,7 +92,7 @@ func TestGenerateAtFixedLengthWithContext_Timeout(t *testing.T) {
 }
 
 func TestGenerateAtFixedLengthWithContext_CancelsDuringWalk(t *testing.T) {
-	encoder := NewDankEncoder("[a-z][a-z][a-z][a-z][a-z]", 5)
+	encoder := NewDankEncoder("[a-z][a-z][a-z][a-z][a-z]")
 	parent, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ctx := &cancelAfter{Context: parent, cancel: cancel}
@@ -110,7 +112,7 @@ func TestGenerateAtFixedLengthWithContext_CancelsDuringWalk(t *testing.T) {
 }
 
 func TestGenerateAtFixedLengthWithContextAndLimit(t *testing.T) {
-	encoder := NewDankEncoder("(a|b|c|d)[0-9]", 2)
+	encoder := NewDankEncoder("(a|b|c|d)[0-9]")
 
 	// Normal execution with limit
 	ctx := context.Background()
@@ -125,4 +127,46 @@ func TestGenerateAtFixedLengthWithContextAndLimit(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, context.Canceled, err)
 	require.Empty(t, results)
+}
+
+func TestNumWordsSaturates(t *testing.T) {
+	for _, n := range []int{14, 15} {
+		pattern := strings.Repeat("[a-z]", n)
+		require.Equal(t, int64(math.MaxInt64), NewDankEncoder(pattern).NumWords(n, n), "length %d", n)
+		require.Equal(t, int64(math.MaxInt64), CountWords(pattern, n, n), "count-only, length %d", n)
+	}
+
+	// The long branch overflows at length 15 but only accepts at length 16.
+	pattern := strings.Repeat("[a-z]", 15) + "x|z"
+	require.Equal(t, int64(1), NewDankEncoder(pattern).NumWords(1, 15))
+	require.Equal(t, int64(1), CountWords(pattern, 1, 15))
+}
+
+func TestGenerateAtImpossibleLength(t *testing.T) {
+	pattern := strings.Repeat("[a-z]", 12) + "(a|bb)?"
+	encoder := NewDankEncoder(pattern)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	results, err := encoder.GenerateAtFixedLengthWithContextAndLimit(ctx, 15, 500)
+	require.NoError(t, err)
+	require.Empty(t, results)
+}
+
+func TestCountWordsDistinctStringsInLengthRange(t *testing.T) {
+	const pattern = `(a|a|b)(1|2)?`
+	encoder := NewDankEncoder(pattern)
+	for _, tc := range []struct {
+		minLen, maxLen int
+		want           int64
+	}{
+		{0, 0, 0},
+		{1, 1, 2},
+		{2, 2, 4},
+		{1, 256, 6},
+		{3, 256, 0},
+	} {
+		require.Equal(t, tc.want, encoder.NumWords(tc.minLen, tc.maxLen))
+		require.Equal(t, tc.want, CountWords(pattern, tc.minLen, tc.maxLen))
+	}
 }
