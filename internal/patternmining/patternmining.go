@@ -104,7 +104,7 @@ func (m *Miner) numWords(regex string) int64 {
 	if n, ok := m.words[regex]; ok {
 		return n
 	}
-	n := dank.NewDankEncoder(m.preparePattern(regex), 256).NumWords(1, 256)
+	n := dank.CountWords(m.preparePattern(regex), 1, 256)
 	m.words[regex] = n
 	return n
 }
@@ -411,15 +411,8 @@ func (m *Miner) EstimateCount(patterns []string) int64 {
 			continue
 		}
 
-		// Calculate fixed length for generation
-		tempEncoder := dank.NewDankEncoder(m.preparePattern(subdomainPattern), 1)
-		fixedSlice := tempEncoder.NumStates() - 2
-		if fixedSlice < 0 {
-			fixedSlice = 0
-		}
-
-		encoder := dank.NewDankEncoder(m.preparePattern(subdomainPattern), fixedSlice)
-		// Use NumWords to count strings at fixed length without generating them
+		encoder := dank.NewDankEncoder(m.preparePattern(subdomainPattern))
+		fixedSlice := max(0, encoder.NumStates()-2)
 		count := encoder.NumWords(fixedSlice, fixedSlice)
 		if count > math.MaxInt64-totalEstimate {
 			totalEstimate = math.MaxInt64
@@ -452,14 +445,8 @@ func (m *Miner) GenerateFromPatternsWithContext(ctx context.Context, patterns []
 			continue
 		}
 
-		// Calculate fixed length for generation
-		tempEncoder := dank.NewDankEncoder(m.preparePattern(subdomainPattern), 1)
-		fixedSlice := tempEncoder.NumStates() - 2
-		if fixedSlice < 0 {
-			fixedSlice = 0
-		}
-
-		encoder := dank.NewDankEncoder(m.preparePattern(subdomainPattern), fixedSlice)
+		encoder := dank.NewDankEncoder(m.preparePattern(subdomainPattern))
+		fixedSlice := max(0, encoder.NumStates()-2)
 		var generated []string
 		if m.opts.PatternThreshold > 0 {
 			generated, _ = encoder.GenerateAtFixedLengthWithContextAndLimit(ctx, fixedSlice, m.opts.PatternThreshold)

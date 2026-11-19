@@ -2,6 +2,8 @@ package patternmining
 
 import (
 	"context"
+	"math"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,4 +121,14 @@ func TestGenerateFromPatterns_ThresholdLimit(t *testing.T) {
 	results := miner.GenerateFromPatterns(patterns)
 	require.NotEmpty(t, results)
 	require.LessOrEqual(t, len(results), 3)
+}
+
+func TestEstimateCountSaturates(t *testing.T) {
+	miner := NewMiner(&Options{Target: "example.com"})
+	suffix := strings.Repeat("[a-z]", 13) + ".example.com"
+	patterns := []string{"a" + suffix, "b" + suffix, "c" + suffix, "d" + suffix}
+
+	// Each pattern admits 26^13 names. Four patterns exceed int64.
+	require.Equal(t, int64(2481152873203736576), miner.EstimateCount(patterns[:1]))
+	require.Equal(t, int64(math.MaxInt64), miner.EstimateCount(patterns))
 }
